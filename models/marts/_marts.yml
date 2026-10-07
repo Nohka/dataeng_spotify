@@ -1,0 +1,245 @@
+version: 2
+
+models:
+  - name: fact_song_weekly
+    description: >
+      Periodic snapshot fact. Grain: one row per ISO week x country x canonical song in
+      which the song charted. country_code is a degenerate dimension and mixes real
+      markets with the 'global' pseudo-chart, whose streams overlap the per-country
+      rows - exclude it when aggregating across countries.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [week_date_key, country_code, track_uri]
+      # a re-entry after a gap must not carry a stale "previous week" rank or streams
+      - dbt_utils.expression_is_true:
+          expression: "charted_prev_week or prev_week_best_rank is null"
+      - dbt_utils.expression_is_true:
+          expression: "charted_prev_week or prev_week_streams is null"
+      - dbt_utils.expression_is_true:
+          expression: "charted_prev_week or stream_growth_wow is null"
+      # Top-10 days are a subset of charted days
+      - dbt_utils.expression_is_true:
+          expression: "days_top10 <= days_on_chart"
+      - dbt_utils.expression_is_true:
+          expression: "days_with_streams <= days_on_chart"
+    columns:
+      - name: week_date_key
+        description: "INTEGER yyyymmdd of the ISO-week Monday. FK -> dim_date.date_key."
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_date'), field: date_key}
+      - name: country_code
+        description: "VARCHAR. Degenerate dimension: ISO-2 market or 'global'."
+        tests: [not_null]
+      - name: track_uri
+        description: "VARCHAR. FK -> dim_song.track_uri."
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_song'), field: track_uri}
+      - name: label_name_norm
+        description: "VARCHAR. FK -> dim_label.label_name_norm; '(unknown)' when the chart row had no label."
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_label'), field: label_name_norm}
+      - name: weekly_streams
+        description: >
+          BIGINT. Additive. Sum of daily streams for the song/country/week. 0 rather
+          than NULL when the source published no stream count for any day of the week
+          (see days_with_streams), so downstream SUMs and ratios stay well defined.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0}
+      - name: days_with_streams
+        description: >
+          INTEGER 0-7. Days of the week that actually carried a stream count. Less than
+          days_on_chart means weekly_streams understates the true total - filter on
+          this when stream totals must be complete.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 7}
+      - name: prev_week_streams
+        description: "BIGINT, nullable. weekly_streams of the immediately preceding week; NULL after a gap."
+      - name: stream_gain_wow
+        description: >
+          BIGINT. weekly_streams minus the previous week's (0 when the song did not
+          chart last week, so a new entry gains its full week). Used by Q4 - unlike a
+          ratio it does not explode on tiny denominators.
+        tests: [not_null]
+      - name: days_on_chart
+        description: "INTEGER 1-7. Distinct days the song charted that week."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 7}
+      - name: days_top10
+        description: "INTEGER 0-7. Distinct days the song was ranked 1-10."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 7}
+      - name: best_rank
+        description: "INTEGER 1-200. Best (lowest) daily position that week. Semi-additive - never SUM it."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 200}
+      - name: charted_prev_week
+        description: "BOOLEAN. True when the song also charted in the immediately preceding ISO week."
+        tests: [not_null]
+      - name: prev_week_best_rank
+        description: "INTEGER, nullable. best_rank of the immediately preceding week; NULL after a gap."
+      - name: stream_growth_wow
+        description: "NUMERIC, nullable. weekly_streams / prev_week_streams - 1. NULL after a gap."
+      - name: heat_score
+        description: >
+          NUMERIC. weekly_streams x (1 + growth clamped to [-0.5, +1.0]). Q1's ranking
+          measure: streams stay dominant, momentum can at most double a song's weight.
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0}
+      - name: chart_week_no
+        description: "INTEGER. 1 for the song's first charted week in that country, then 2, 3 ... (counts charted weeks, not calendar weeks)."
+        tests: [not_null]
+      - name: weeks_since_release
+        description: >
+          INTEGER, nullable. Whole ISO weeks from the song's RELEASE week to this chart
+          week; 0 in the release week. NULL when no plausible release date is known.
+          222 of 717,593 rows (0.03%, 79 songs) are negative: they charted before any
+          release date recorded in the source, the 2 worst by 9 weeks (e.g. Veronica
+          Maggio "Sy dig pa mig", rank 17 in se - songs.csv AND every one of its chart
+          rows give 2026-03-20, yet it charted from 2026-01-16). Pre-release promo
+          appearances and source metadata errors cannot be told apart from these files.
+          That is a source limitation, not a modelling error, so
+          the bound below allows one quarter of slack - wide enough for a pre-release
+          promo window, tight enough to catch a regression (the old off-by-one formula
+          produced values down to -361).
+        tests:
+          - dbt_utils.accepted_range: {min_value: -13}
+
+  - name: fact_artist_weekly
+    description: >
+      Periodic snapshot fact. Grain: one row per ISO week x country x artist in which
+      the artist charted. See fact_song_weekly on the 'global' pseudo-country.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [week_date_key, country_code, artist_uri]
+      - dbt_utils.expression_is_true:
+          expression: "days_top20 <= days_on_chart"
+      - dbt_utils.expression_is_true:
+          expression: "best_rank <= avg_rank"
+    columns:
+      - name: week_date_key
+        description: "INTEGER yyyymmdd of the ISO-week Monday. FK -> dim_date.date_key."
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_date'), field: date_key}
+      - name: country_code
+        description: "VARCHAR. Degenerate dimension: ISO-2 market or 'global'."
+        tests: [not_null]
+      - name: artist_uri
+        description: "VARCHAR. FK -> dim_artist.artist_uri."
+        tests:
+          - not_null
+          - relationships: {to: ref('dim_artist'), field: artist_uri}
+      - name: days_on_chart
+        description: "INTEGER 1-7. Distinct days the artist charted that week (duplicate same-day entries collapsed to the best rank)."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 7}
+      - name: days_top20
+        description: "INTEGER 0-7. Distinct days the artist was ranked 1-20."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 7}
+      - name: best_rank
+        description: "INTEGER 1-200. Best daily position that week. Semi-additive."
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 200}
+      - name: avg_rank
+        description: "NUMERIC. Mean daily position that week. Do NOT average across weeks - use rank_sum / days_on_chart."
+        tests: [not_null]
+      - name: rank_sum
+        description: "INTEGER. Sum of daily positions. Additive, so a consumer can build a day-weighted mean rank across weeks."
+        tests: [not_null]
+      - name: rank_points
+        description: >
+          INTEGER 1-1400. sum(201 - daily rank): 200 points for rank 1 down to 1 for
+          rank 200. Additive and non-saturating; 1400 = rank 1 on all seven days.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 1400}
+      - name: presence_score
+        description: "NUMERIC. rank_points / 200, i.e. 'equivalent rank-1 days'. Q2's ranking measure. Additive across weeks."
+        tests: [not_null]
+
+  - name: dim_date
+    description: >
+      Static date dimension at DAY grain, used by both facts in a WEEK role via
+      week_date_key -> date_key. Calendar attributes therefore describe the ISO-week
+      MONDAY; a week that straddles a quarter boundary is attributed wholly to its
+      Monday's quarter.
+    columns:
+      - name: date_key
+        description: "INTEGER yyyymmdd. Primary key."
+        tests: [not_null, unique]
+      - name: full_date
+        description: "DATE."
+        tests: [not_null, unique]
+      - name: year
+        description: "INTEGER. Calendar year."
+      - name: quarter
+        description: "INTEGER 1-4. Calendar quarter."
+      - name: month
+        description: "INTEGER 1-12."
+      - name: iso_year
+        description: "INTEGER. ISO-8601 week-numbering year (differs from year around 1 January)."
+      - name: iso_week
+        description: "INTEGER 1-53. ISO-8601 week number."
+      - name: week_start_date
+        description: "DATE. Monday of the ISO week."
+        tests: [not_null]
+      - name: week_end_date
+        description: "DATE. Sunday of the ISO week."
+        tests: [not_null]
+      - name: week_date_key
+        description: "INTEGER yyyymmdd of week_start_date."
+        tests: [not_null]
+
+  - name: dim_song
+    description: "SCD 1 song dimension. Grain: one canonical song. Includes synthesised members for chart URIs absent from songs.csv."
+    columns:
+      - name: track_uri
+        description: "VARCHAR. Primary key (natural key)."
+        tests: [not_null, unique]
+      - name: track_name
+        description: "VARCHAR, nullable (NULL for unknown-song members)."
+      - name: primary_artist_name
+        description: "VARCHAR, nullable. First name in artist_names. DISPLAY ONLY - not a key; dim_artist cannot be joined through it."
+      - name: release_date
+        description: "DATE, nullable. NULL when unknown or implausible (outside 1900-01-01 .. +1y)."
+      - name: is_unknown_song
+        description: "BOOLEAN. True when the song charted but songs.csv has no row for it."
+        tests: [not_null]
+
+  - name: dim_artist
+    description: "SCD 1 artist dimension. Grain: one artist that charted in the window."
+    columns:
+      - name: artist_uri
+        description: "VARCHAR. Primary key (natural key)."
+        tests: [not_null, unique]
+      - name: artist_name
+        description: "VARCHAR. NOT unique - 329 names map to several artists. Always group by artist_uri."
+        tests: [not_null]
+
+  - name: dim_label
+    description: "SCD 1 label dimension. Grain: one normalised label name. Includes an '(unknown)' member."
+    columns:
+      - name: label_name_norm
+        description: "VARCHAR. Primary key: lower(btrim(label))."
+        tests: [not_null, unique]
+      - name: label_name
+        description: "VARCHAR. Most frequent raw spelling, for display."
+        tests: [not_null]
+      - name: label_group_norm
+        description: "VARCHAR. Heuristic parent key: segment before the first '/'. Use for Q3-style roll-ups."
+        tests: [not_null]
+      - name: label_group
+        description: "VARCHAR. Display form of label_group_norm."
+        tests: [not_null]

@@ -1,0 +1,82 @@
+version: 2
+
+models:
+  - name: stg_spotify__charts_songs_daily
+    description: >
+      1:1 with charts_songs_daily.csv. Casts, renames, -1 -> NULL on previous_rank and
+      ''-> NULL on label. No filters: the ingestion window lives in int_song_chart_daily.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [chart_date, country_code, rank]
+    columns:
+      - name: chart_date
+        description: "DATE. Chart day."
+        tests: [not_null]
+      - name: country_code
+        description: "VARCHAR. ISO-2 lower-case market, or 'global' for the worldwide chart."
+        tests: [not_null]
+      - name: rank
+        description: "INTEGER. Chart position 1-200."
+        tests: [not_null]
+      - name: track_uri_raw
+        description: "VARCHAR. Release-specific Spotify track URI as published; resolved to a canonical URI downstream."
+        tests: [not_null]
+      - name: label_name
+        description: "VARCHAR. Record label as published, trimmed; NULL when absent (43,245 rows over full history)."
+      - name: streams
+        description: "BIGINT. Streams on that day in that market. NULL on a small number of rows."
+      - name: entry_status
+        description: "VARCHAR. NEW_ENTRY | MOVED_UP | MOVED_DOWN | NO_CHANGE | RE_ENTRY."
+        tests:
+          - accepted_values:
+              values: [NEW_ENTRY, MOVED_UP, MOVED_DOWN, NO_CHANGE, RE_ENTRY]
+      - name: release_date
+        description: "DATE. Release date as published on the chart row; dim_song uses songs.csv instead."
+
+  - name: stg_spotify__charts_artists_daily
+    description: 1:1 with charts_artists_daily.csv. Casts, renames and -1 -> NULL only.
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [chart_date, country_code, rank]
+    columns:
+      - name: chart_date
+        description: "DATE. Chart day."
+        tests: [not_null]
+      - name: country_code
+        description: "VARCHAR. ISO-2 lower-case market, or 'global'."
+        tests: [not_null]
+      - name: rank
+        description: "INTEGER. Chart position 1-200."
+        tests: [not_null]
+      - name: artist_uri
+        description: "VARCHAR. Spotify artist URI. Natural key; no alias resolution needed."
+        tests: [not_null]
+      - name: entry_status
+        description: "VARCHAR. NEW_ENTRY | MOVED_UP | MOVED_DOWN | NO_CHANGE | RE_ENTRY."
+        tests:
+          - accepted_values:
+              values: [NEW_ENTRY, MOVED_UP, MOVED_DOWN, NO_CHANGE, RE_ENTRY]
+
+  - name: stg_spotify__songs
+    description: 1:1 with songs.csv. Casts and renames only; pipe-separated lists stay raw.
+    columns:
+      - name: track_uri
+        description: "VARCHAR. Canonical Spotify track URI. Primary key of the file."
+        tests: [not_null, unique]
+      - name: artist_names
+        description: "VARCHAR. Pipe-separated artist names, primary artist first."
+      - name: artist_uris
+        description: "VARCHAR. Pipe-separated artist URIs, aligned with artist_names."
+      - name: release_date
+        description: "DATE. Release date. Ranges 1840-06-14 to +1y; implausible values are nulled in int_song, not filtered out."
+      - name: all_uris
+        description: "VARCHAR. Pipe-separated release-specific URIs for this song; always includes track_uri itself."
+
+  - name: stg_spotify__artists
+    description: 1:1 with artists.csv. Casts and renames only. Listener columns unused downstream.
+    columns:
+      - name: artist_uri
+        description: "VARCHAR. Spotify artist URI. Primary key of the file."
+        tests: [not_null, unique]
+      - name: artist_name
+        description: "VARCHAR. Artist display name. NOT unique across artists."
