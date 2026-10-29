@@ -1,0 +1,27 @@
+# Postgres bind-mount data directories (created by docker compose)
+pgdata_airflow/
+pgdata_raw/
+
+# Airflow and dbt logs
+logs/*
+!logs/.gitkeep
+
+# Downloaded Kaggle files, DuckDB warehouse, dbt artifacts, query results
+data/*
+!data/.gitkeep
+
+# dbt artifacts if dbt is run outside Docker
+dbt_project/target/
+dbt_project/logs/
+dbt_project/.user.yml
+
+# Local docker compose overrides and credentials (never committed).
+# The committed template is .env.example -- copy it to .env to customize.
+.env
+!.env.example
+kaggle.json
+
+# OS / editor files
+.DS_Store
+__pycache__/
+.ipynb_checkpoints/

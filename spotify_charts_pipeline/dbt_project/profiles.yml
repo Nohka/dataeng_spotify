@@ -1,0 +1,20 @@
+# dbt connection. dbt builds its models in a DuckDB file (the warehouse) and reads the raw
+# Kaggle tables straight from the raw Postgres database, which is attached as catalog "raw".
+# All values come from environment variables set in compose.yml.
+spotify_charts:                   # must match "profile" in dbt_project.yml
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '/opt/airflow/data/warehouse/spotify.duckdb') }}"
+      threads: 1                  # DuckDB has one writer per file
+      extensions:
+        - postgres
+      settings:
+        memory_limit: "{{ env_var('DUCKDB_MEMORY_LIMIT', '4GB') }}"
+        preserve_insertion_order: false
+      attach:
+        - path: "host={{ env_var('RAW_DB_HOST', 'raw-db') }} port=5432 dbname={{ env_var('RAW_DB_NAME', 'spotify_raw') }} user={{ env_var('RAW_DB_USER', 'raw_user') }} password={{ env_var('RAW_DB_PASSWORD', 'raw_pass') }}"
+          type: postgres
+          alias: raw
+          read_only: true         # dbt never writes to the raw layer

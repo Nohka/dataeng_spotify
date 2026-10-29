@@ -1,0 +1,168 @@
+# Spotify Charts pipeline: Airflow + raw Postgres + DuckDB warehouse (built by dbt).
+# Structure follows the course's 03_Airflow example: a separate Postgres for Airflow metadata
+# and for pipeline data, and airflow-init / -webserver / -scheduler with LocalExecutor.
+# The data is browsed with DBeaver on the laptop (raw-db on port 5433, warehouse file in ./data).
+# Difference: the Airflow services use an image built from ./Dockerfile (adds dbt, duckdb, kagglehub).
+
+services:
+  # --- Airflow metadata database ---
+  airflow-db:
+    container_name: airflow-db
+    image: postgres:${POSTGRES_VERSION:-16.4}
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER:-airflow}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:-airflow}
+      PGUSER: ${AIRFLOW_DB_USER:-airflow}
+      PGPASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
+      PGDATABASE: ${AIRFLOW_DB_NAME:-airflow}
+    volumes:
+      - ./pgdata_airflow:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
+      interval: 10s
+      retries: 5
+    restart: always
+
+  # --- Raw (bronze) database: the Kaggle tables as loaded by the DAG ---
+  # Port 5433 on the laptop: used by DBeaver.
+  raw-db:
+    container_name: raw-db
+    image: postgres:${POSTGRES_VERSION:-16.4}
+    environment:
+      POSTGRES_USER: ${RAW_DB_USER:-raw_user}
+      POSTGRES_PASSWORD: ${RAW_DB_PASSWORD:-raw_pass}
+      POSTGRES_DB: ${RAW_DB_NAME:-spotify_raw}
+      PGUSER: ${RAW_DB_USER:-raw_user}
+      PGPASSWORD: ${RAW_DB_PASSWORD:-raw_pass}
+      PGDATABASE: ${RAW_DB_NAME:-spotify_raw}
+    ports:
+      - "${RAW_DB_PORT:-5433}:5432"
+    volumes:
+      - ./pgdata_raw:/var/lib/postgresql/data
+      # Applied automatically the first time the database is created.
+      # To re-run it, remove ./pgdata_raw and bring the stack back up.
+      - ./sql/create_raw_tables.sql:/docker-entrypoint-initdb.d/01_create_raw_tables.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      retries: 5
+    restart: always
+
+  # --- Airflow Webserver ---
+  airflow-webserver:
+    # The image is built once, by airflow-init (see below); this service only uses it.
+    image: &airflow-image spotify-airflow:${AIRFLOW_VERSION:-2.8.1}
+    pull_policy: never          # local image, not on Docker Hub
+    container_name: airflow-webserver
+    command: webserver
+    user: "50000:0"
+    environment:
+      &airflow-common-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:-airflow}:${AIRFLOW_DB_PASSWORD:-airflow}@airflow-db:5432/${AIRFLOW_DB_NAME:-airflow}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth"
+      # Connection used by the DAG via PostgresHook(postgres_conn_id="raw_db").
+      AIRFLOW_CONN_RAW_DB: postgres://${RAW_DB_USER:-raw_user}:${RAW_DB_PASSWORD:-raw_pass}@raw-db:5432/${RAW_DB_NAME:-spotify_raw}
+      # Same database, read by DuckDB (loader task) and dbt (profiles.yml)
+      RAW_DB_HOST: raw-db
+      RAW_DB_NAME: ${RAW_DB_NAME:-spotify_raw}
+      RAW_DB_USER: ${RAW_DB_USER:-raw_user}
+      RAW_DB_PASSWORD: ${RAW_DB_PASSWORD:-raw_pass}
+      # Kaggle credentials (from .env) and where kagglehub keeps downloaded files
+      KAGGLE_USERNAME: ${KAGGLE_USERNAME:-}
+      KAGGLE_KEY: ${KAGGLE_KEY:-}
+      KAGGLEHUB_CACHE: /opt/airflow/data/kaggle
+      # Pipeline parameters (defaults for the DAG's params)
+      PIPELINE_START_DATE: ${PIPELINE_START_DATE:-2025-01-01}
+      KAGGLE_DATASET_VERSION: ${KAGGLE_DATASET_VERSION:-}
+      # DuckDB warehouse and dbt
+      DUCKDB_PATH: /opt/airflow/data/warehouse/spotify.duckdb
+      DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-4GB}
+      DBT_PROFILES_DIR: /opt/airflow/dbt_project
+      DBT_TARGET_PATH: /opt/airflow/data/dbt/target
+      DBT_LOG_PATH: /opt/airflow/logs/dbt
+      DBT_SEND_ANONYMOUS_USAGE_STATS: "false"
+    ports:
+      - "${AIRFLOW_WEB_PORT:-8080}:8080"
+    volumes:
+      &airflow-common-volumes
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./data:/opt/airflow/data
+      - ./dbt_project:/opt/airflow/dbt_project
+      - ./sql:/opt/airflow/sql:ro
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-db:
+        condition: service_healthy
+      raw-db:
+        condition: service_healthy
+    restart: always
+
+  # --- Airflow Scheduler ---
+  # With LocalExecutor the scheduler runs the tasks, so it needs the same image, environment
+  # and mounts as the webserver.
+  airflow-scheduler:
+    image: *airflow-image
+    pull_policy: never          # local image, built by airflow-init
+    container_name: airflow-scheduler
+    command: scheduler
+    user: "50000:0"
+    environment: *airflow-common-env
+    volumes: *airflow-common-volumes
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      airflow-db:
+        condition: service_healthy
+      raw-db:
+        condition: service_healthy
+    restart: always
+
+  # --- Airflow DB initialization, user setup & connection registration ---
+  # Runs as root only to create and fix ownership of the bind mounts, then drops to the
+  # airflow user (uid 50000).
+  airflow-init:
+    # Builds the Airflow image from ./Dockerfile. Only this service builds it: if all three Airflow
+    # services did, Docker would build the same image three times in parallel and fail.
+    build:
+      context: .
+      args:
+        AIRFLOW_VERSION: ${AIRFLOW_VERSION:-2.8.1}
+    image: *airflow-image
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    user: "0:0"
+    command:
+      - -c
+      - |
+        set -e
+        mkdir -p /opt/airflow/logs/dbt /opt/airflow/dags /opt/airflow/data/kaggle /opt/airflow/data/warehouse /opt/airflow/data/dbt
+        chown -R 50000:0 /opt/airflow/logs /opt/airflow/dags /opt/airflow/data /opt/airflow/dbt_project
+        exec runuser -u airflow -- bash -euc "
+          airflow db migrate
+          airflow users create \
+            --username ${AIRFLOW_ADMIN_USER:-airflow} \
+            --password ${AIRFLOW_ADMIN_PASSWORD:-airflow} \
+            --firstname Admin --lastname User \
+            --role Admin --email ${AIRFLOW_ADMIN_EMAIL:-admin@example.com} || true
+          airflow connections delete raw_db 2>/dev/null || true
+          airflow connections add raw_db \
+            --conn-type postgres \
+            --conn-host raw-db \
+            --conn-port 5432 \
+            --conn-schema ${RAW_DB_NAME:-spotify_raw} \
+            --conn-login ${RAW_DB_USER:-raw_user} \
+            --conn-password ${RAW_DB_PASSWORD:-raw_pass}
+        "
+    environment: *airflow-common-env
+    volumes: *airflow-common-volumes
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      raw-db:
+        condition: service_healthy
+    restart: "no"

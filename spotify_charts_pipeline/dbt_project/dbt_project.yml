@@ -1,0 +1,22 @@
+name: spotify_charts
+version: '1.0'
+profile: spotify_charts           # must match the top key in profiles.yml
+
+model-paths: ["models"]
+test-paths: ["tests"]
+
+vars:
+  # Analysis window: chart rows before this date are dropped in staging, and Q5 only
+  # covers songs released on/after it. The Airflow DAG passes its own value with --vars.
+  start_date: '2025-01-01'
+
+models:
+  spotify_charts:
+    # Silver layer (stg_*, int_*): views. They store only their SQL and read straight through to
+    # the raw tables in Postgres, so they always reflect the latest load.
+    +materialized: view
+    marts:
+      # Gold layer (mart_*, dim_*): tables, stored in the DuckDB file. Each dbt build recalculates
+      # them once (fully rebuilt, never incremental), so reporting queries are fast and do not
+      # need the raw Postgres database.
+      +materialized: table

@@ -1,0 +1,114 @@
+version: 2
+
+models:
+  - name: int_song_uri_map
+    description: Maps every track URI to its song (song_id), built from songs.all_uris.
+    columns:
+      - name: track_uri
+        description: Any Spotify URI of a song. Must belong to exactly one song.
+        data_tests: [unique, not_null]
+      - name: song_id
+        description: The song's main URI (songs.track_uri).
+        data_tests: [not_null]
+
+  - name: int_charts_songs_daily
+    description: >
+      Daily song chart, cleaned. Duplicate records (same URI twice on one day) removed by keeping the
+      better rank; every row gets a song_id. Grain: chart_date x country_code x track_uri.
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', chart_date, country_code, track_uri)"
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', chart_date, country_code, chart_rank)"
+    columns:
+      - name: week_start
+        description: Monday of the chart day's week.
+      - name: song_id
+        description: Song the URI belongs to. Falls back to track_uri for URIs missing from songs.csv.
+        data_tests: [not_null]
+
+  - name: int_charts_artists_daily
+    description: >
+      Daily artist chart without side histories (later chart histories under the same artist URI and
+      country, most likely a same-name artist mapped to the wrong URI). Grain: chart_date x country_code x artist_uri.
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', chart_date, country_code, artist_uri)"
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', chart_date, country_code, chart_rank)"
+
+  - name: int_songs_weekly
+    description: Weekly song chart per country (Q2, Q3, Q4). Grain week_start x country_code x song_id.
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', week_start, country_code, song_id)"
+    columns:
+      - name: label
+        description: Record label, from the song's best-ranked row in the week that has a label.
+      - name: weekly_streams
+        description: Sum of daily streams in the week, over all URIs of the song.
+      - name: best_rank
+        description: Best daily rank in the week (lowest number).
+      - name: days_on_chart
+        description: Distinct chart days in the week.
+      - name: is_complete_week
+        description: TRUE if the country has all 7 chart days in this week.
+      - name: is_prev_week_complete
+        description: TRUE if the country's previous week exists, is 7 days earlier and has all 7 chart days.
+      - name: stream_gain_wow
+        description: weekly_streams minus last week's streams (0 if the song was not on the chart last week).
+      - name: stream_growth_pct_wow
+        description: Week-over-week growth in %. NULL if the song was not on the chart last week.
+      - name: was_outside_top_n_prev_week
+        description: TRUE if the song's best rank last week was worse than 20, or it did not chart.
+      - name: streams_rank_in_week
+        description: 1 = the most-streamed song in this country and week.
+
+  - name: int_artist_country_weekly_presence
+    description: Weekly chart presence per artist and country (Q1). Excludes 'global'.
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', week_start, country_code, artist_uri)"
+    columns:
+      - name: presence_points
+        description: SUM(201 - daily rank) in the week. Additive, so it can be summed over any period.
+      - name: rank_sum
+        description: SUM(daily rank). Average rank over any period = SUM(rank_sum) / SUM(chart_days).
+      - name: is_complete_week
+        description: TRUE if the country's artist chart has all 7 days in this week.
+      - name: country_rank_for_artist_in_week
+        description: 1 = the artist's strongest country in this week.
+
+  - name: int_song_chart_lifespan
+    description: Chart life per song and country, for songs released since start_date (Q5).
+    data_tests:
+      - unique:
+          arguments:
+            column_name: "CONCAT_WS('|', song_id, country_code)"
+    columns:
+      - name: release_date
+        description: Earliest of the source release_date and the song's first chart entry anywhere.
+      - name: chart_days
+        description: Number of days the song was on this country's chart.
+      - name: days_release_to_exit
+        description: Days from release to the last chart day.
+      - name: is_still_charting
+        description: TRUE if the song is on the chart on the latest data day (run not finished).
+
+  - name: int_song
+    description: One row per song. Songs from songs.csv, plus "unknown" songs that are on the chart but missing from songs.csv.
+    columns:
+      - name: song_id
+        data_tests: [unique, not_null]
+
+  - name: int_artist
+    description: One row per artist. Artists from artists.csv, plus "unknown" artists that are on the chart but missing from artists.csv.
+    columns:
+      - name: artist_uri
+        data_tests: [unique, not_null]

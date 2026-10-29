@@ -1,0 +1,63 @@
+version: 2
+
+models:
+  - name: stg_charts_songs_daily
+    description: Daily song chart rows from start_date onwards. Renamed and typed, otherwise as in the source.
+    columns:
+      - name: chart_date
+        description: Chart day.
+        data_tests: [not_null]
+      - name: country_code
+        description: Two-letter country code, or 'global' for the worldwide chart.
+        data_tests: [not_null]
+      - name: chart_rank
+        description: Position on the chart (1 = best).
+        data_tests: [not_null]
+      - name: track_uri
+        description: Spotify track URI. One song can have several URIs.
+        data_tests: [not_null]
+      - name: streams
+        description: Streams on that day in that country.
+      - name: previous_rank
+        description: Rank on the previous day. NULL if the song was not on the chart.
+      - name: entry_date
+        description: First date the song appeared on this country's chart (counted from the start of the dataset).
+      - name: release_date
+        description: Release date of the album the track is currently linked to. Often later than the real first release.
+
+  - name: stg_charts_artists_daily
+    description: Daily artist chart rows from start_date onwards. Renamed and typed, otherwise as in the source.
+    columns:
+      - name: chart_date
+        description: Chart day.
+        data_tests: [not_null]
+      - name: country_code
+        description: Two-letter country code, or 'global'.
+        data_tests: [not_null]
+      - name: chart_rank
+        description: Position on the chart (1 = best).
+        data_tests: [not_null]
+      - name: artist_uri
+        description: Spotify artist URI.
+        data_tests: [not_null]
+      - name: entry_date
+        description: First date of this chart history. Identifies a history together with artist_uri and country.
+        data_tests: [not_null]
+
+  - name: stg_songs
+    description: One row per song.
+    columns:
+      - name: track_uri
+        description: The song's main URI.
+        data_tests: [unique, not_null]
+      - name: all_uris
+        description: Every URI of the same song, separated by '|'.
+
+  - name: stg_artists
+    description: One row per artist.
+    columns:
+      - name: artist_uri
+        description: Spotify artist URI.
+        data_tests: [unique, not_null]
+      - name: artist_name
+        description: Artist name. Not unique (same-name profiles exist). 'N/A' and 'None' are real values.

@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  # --- Facts ---
+  - name: mart_artist_country_weekly_presence
+    description: >
+      Fact. Grain: week_start x country_code x artist_uri.
+      Q1: for a given artist, in which country is their chart presence the strongest?
+      Sum presence_points over the weeks of the period, then rank the countries.
+    columns:
+      - name: artist_uri
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_artist')
+                field: artist_uri
+
+  - name: mart_songs_weekly
+    description: >
+      Fact. Grain: week_start x country_code x song_id.
+      Q2: hottest song in a country this week (streams_rank_in_week = 1).
+      Q3: labels with hits (first week with best_rank <= 10).
+      Q4: breakouts (was_outside_top_n_prev_week, largest stream_gain_wow).
+    columns:
+      - name: song_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_song')
+                field: song_id
+
+  - name: mart_song_chart_lifespan
+    description: >
+      Fact. Grain: song_id x country_code.
+      Q5: how long songs stay on the chart after release, per country. Use rows with is_still_charting = FALSE.
+    columns:
+      - name: song_id
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_song')
+                field: song_id
+
+  # --- Dimensions ---
+  - name: dim_song
+    description: Song dimension (SCD 1). Key song_id joins to mart_songs_weekly and mart_song_chart_lifespan.
+    columns:
+      - name: song_id
+        data_tests: [unique, not_null]
+
+  - name: dim_artist
+    description: Artist dimension (SCD 1). Key artist_uri joins to mart_artist_country_weekly_presence.
+    columns:
+      - name: artist_uri
+        data_tests: [unique, not_null]
