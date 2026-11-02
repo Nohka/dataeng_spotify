@@ -203,7 +203,9 @@ with DAG(
     dag_id="kaggle_to_raw",
     description="Download the Spotify charts from Kaggle and load them into the raw Postgres database",
     start_date=pendulum.datetime(2026, 1, 1, tz="UTC"),
-    schedule="@daily",                 # the Kaggle dataset is updated daily
+    # No schedule: the DAG runs when it is triggered (▶ in the UI, or `airflow dags trigger`).
+    # Kaggle publishes a new version daily, so every manual run gets the latest data.
+    schedule=None,
     catchup=False,
     max_active_runs=1,
     default_args=default_args,

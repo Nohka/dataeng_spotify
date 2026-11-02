@@ -140,9 +140,10 @@ This runs only `download_files`, in your terminal, while the DAG is still paused
 the Airflow UI and does not load anything into the database. Keep the terminal open until it lists all
 four files and prints `Marking task as SUCCESS`.
 
-**2b. Run the DAG.** In the Airflow UI, switch on the toggle next to **kaggle_to_raw**. The DAG is
-scheduled daily, so Airflow starts a run by itself. `download_files` finds the files from 2a and
-finishes in seconds; the four load tasks take a few minutes each.
+**2b. Run the DAG.** In the Airflow UI, switch on the toggle next to **kaggle_to_raw** (a paused DAG
+does not run, even when triggered), then press **▶ Trigger DAG**. The DAG has no schedule: it runs only
+when it is triggered. `download_files` finds the files from 2a and finishes in seconds; the four load
+tasks take a few minutes each.
 
 Follow the run: click **kaggle_to_raw** → **Grid**. Green = success; for a red task, click it → **Logs**.
 
@@ -209,8 +210,9 @@ runs `dbt build`: it creates the silver models (stg, int) as views and the gold 
 tables in the DuckDB warehouse, and
 runs every dbt test, in dependency order. dbt reads the raw tables straight from Postgres.
 
-From then on, every successful **kaggle_to_raw** run triggers **dbt_transform**. You can also trigger
-**dbt_transform** on its own (▶ in the UI), e.g. after changing a model.
+From then on, every successful **kaggle_to_raw** run triggers **dbt_transform**, as long as both DAGs
+are switched on. You can also trigger **dbt_transform** on its own (▶ in the UI), e.g. after changing a
+model.
 
 ## Step 5: browse the dbt models in DBeaver
 
@@ -263,27 +265,31 @@ has the file open, dbt cannot rebuild the models and the task fails with a lock 
 DuckDB connection and run it. Q1 is written for one artist (`'Taylor Swift'`); change the name in
 `q1_artist_strongest_country.sql`.
 
-## Keeping the data up to date
+## Getting the latest data later
 
-Leave both DAGs switched on and the stack running (`docker compose up -d`). Every day at 00:00 UTC
-**kaggle_to_raw** downloads the newest dataset version, reloads the raw tables from `start_date` on,
-and triggers **dbt_transform**, which rebuilds the gold tables. DBeaver shows the new data once
-**dbt_transform** has finished (reconnect the DuckDB connection to see it).
+The pipeline runs on demand, not on a schedule. To refresh the data:
 
-- **Daily download.** Kaggle publishes a new version every day, so each run downloads the ~14 GB again
-  (~20 minutes). `download_files` deletes the previous version afterwards, so the cache stays at one copy.
-- **The computer must be on.** If Docker is not running at 00:00 UTC, that day's run is skipped; the next
-  run loads the full history from `start_date` anyway, so nothing is lost.
-- **Disconnect DBeaver's DuckDB connection overnight.** While it is connected, `dbt_build` cannot write
-  the warehouse file. The task retries 3 times, 10 minutes apart, before it fails.
-- **Changing `start_date`** (in `.env`, then `docker compose up -d`): trigger **kaggle_to_raw** once; the
-  next load and dbt run use the new window.
+1. Disconnect DBeaver's DuckDB connection (while it is connected, `dbt_build` cannot write the warehouse
+   file; the task retries 3 times, 10 minutes apart, before it fails).
+2. In the Airflow UI, press **▶ Trigger DAG** on **kaggle_to_raw** (both DAGs must be switched on). It
+   downloads the newest dataset version, reloads the raw tables from `start_date` on and triggers
+   **dbt_transform**, which rebuilds the gold tables.
+3. Keep the computer awake until both runs are green: the download is ~14 GB (~20 minutes), and if the
+   computer sleeps, it fails with `Read timed out`.
+4. Reconnect DBeaver to see the new data.
+
+Kaggle publishes a new version every day, so a run on a later day downloads the ~14 GB again.
+`download_files` deletes the previous version afterwards, so the cache stays at one copy.
+
+To change `start_date`, set `PIPELINE_START_DATE` in `.env`, run `docker compose up -d`, then trigger
+**kaggle_to_raw**; the load and dbt run use the new window.
 
 ## Useful commands
 
 ```bash
 docker compose ps -a                                     # status of all services
 docker compose logs -f airflow-scheduler                 # task output, DAG import errors
+docker compose exec airflow-scheduler airflow dags trigger kaggle_to_raw    # refresh the data (also ▶ in the UI)
 docker compose stop                                      # pause everything, keep all data
 docker compose start                                     # continue
 docker compose down                                      # remove containers (data stays in pgdata_*/ and data/)
@@ -358,6 +364,10 @@ Main findings from data discovery (details in `notebooks/data_pipelines.ipynb` a
   then run `docker compose up -d`.
 - **`download_files` fails with 404**: Kaggle has not finished building the newest dataset version.
   Trigger with `dataset_version` set to the previous version number (see the dataset page).
+- **`download_files` fails with `Read timed out`**: the connection to Kaggle's file storage dropped
+  during the download, usually because the computer went to sleep. Delete the partial download (the
+  newest, much smaller folder under `data/kaggle/.../versions/`), keep the computer awake and trigger
+  **kaggle_to_raw** again.
 - **Runs download ~14 GB again**: the cached files belong to one dataset version (shown in the path,
   e.g. `data/kaggle/.../versions/149`), and Kaggle publishes a new version daily. While testing, set
   `KAGGLE_DATASET_VERSION=149` in `.env` (then `docker compose up -d`) to keep using the files you have.

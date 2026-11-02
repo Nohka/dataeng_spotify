@@ -53,7 +53,7 @@ with DAG(
             f"cd {DBT_PROJECT_DIR} && "
             "$DBT_BIN build --vars '{\"start_date\": \"{{ params.start_date }}\"}'"
         ),
-        # The scheduled run fails with a lock error if DBeaver has the DuckDB file open.
+        # The run fails with a lock error if DBeaver has the DuckDB file open.
         # Retrying a few times gives time to disconnect DBeaver before the run is marked failed.
         retries=3,
         retry_delay=timedelta(minutes=10),
