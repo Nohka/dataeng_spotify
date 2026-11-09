@@ -17,7 +17,7 @@ services:
       PGPASSWORD: ${AIRFLOW_DB_PASSWORD:-airflow}
       PGDATABASE: ${AIRFLOW_DB_NAME:-airflow}
     volumes:
-      - ./pgdata_airflow:/var/lib/postgresql/data
+      - pgdata_airflow:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER}"]
       interval: 10s
@@ -39,9 +39,9 @@ services:
     ports:
       - "${RAW_DB_PORT:-5433}:5432"
     volumes:
-      - ./pgdata_raw:/var/lib/postgresql/data
+      - pgdata_raw:/var/lib/postgresql/data
       # Applied automatically the first time the database is created.
-      # To re-run it, remove ./pgdata_raw and bring the stack back up.
+      # To re-run it, remove the pgdata_raw volume (docker compose down -v) and bring the stack back up.
       - ./sql/create_raw_tables.sql:/docker-entrypoint-initdb.d/01_create_raw_tables.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
@@ -166,3 +166,21 @@ services:
       raw-db:
         condition: service_healthy
     restart: "no"
+
+  # --- CloudBeaver: DBeaver in the browser, to look at the data (http://localhost:8978) ---
+  # Inside Docker it reaches the raw database as raw-db:5432, and sees the warehouse folder
+  # read-only (:ro), so it can never change the DuckDB file that dbt builds.
+  cloudbeaver:
+    container_name: cloudbeaver
+    image: dbeaver/cloudbeaver:26.2.3
+    ports:
+      - "8978:8978"
+    volumes:
+      - cloudbeaver_workspace:/opt/cloudbeaver/workspace   # keeps your settings and connections
+      - ./data/warehouse:/warehouse:ro
+    restart: always
+
+volumes:
+  pgdata_airflow:
+  pgdata_raw:
+  cloudbeaver_workspace:
