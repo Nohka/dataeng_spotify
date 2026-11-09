@@ -297,8 +297,8 @@ docker compose logs -f airflow-scheduler                 # task output, DAG impo
 docker compose exec airflow-scheduler airflow dags trigger kaggle_to_raw    # refresh the data (also ▶ in the UI)
 docker compose stop                                      # pause everything, keep all data
 docker compose start                                     # continue
-docker compose down                                      # remove containers (data stays in pgdata_*/ and data/)
-docker compose down && rm -rf pgdata_airflow pgdata_raw  # reset both databases
+docker compose down                                      # remove containers (data stays in the Docker volumes and data/)
+docker compose down -v                                   # also delete the volumes: both databases and CloudBeaver's settings
 ```
 
 dbt by hand, inside the scheduler container:
@@ -394,8 +394,9 @@ Main findings from data discovery (details in `notebooks/data_pipelines.ipynb` a
   Edit → turn off *Use smart quotes and dashes*).
 - **A task is killed or DuckDB reports out of memory**: give Docker more memory, or lower
   `DUCKDB_MEMORY_LIMIT` in `.env`.
-- **`container raw-db is unhealthy`**: usually a corrupt data directory:
-  `docker compose down && rm -rf pgdata_airflow pgdata_raw && docker compose up -d`.
-- **Changed `sql/create_raw_tables.sql`**: it only runs when raw-db is created; remove `pgdata_raw`
-  and start again.
+- **`container raw-db is unhealthy`**: usually a corrupt data directory. Delete the volumes and start
+  again: `docker compose down -v && docker compose up -d`. This empties both databases and CloudBeaver's
+  settings; then run the pipeline again from step 2.
+- **Changed `sql/create_raw_tables.sql`**: it only runs when raw-db is created. Delete the volumes the
+  same way (`docker compose down -v && docker compose up -d`) and run the pipeline again from step 2.
 - **Platform mismatch errors** (Apple Silicon): `unset DOCKER_DEFAULT_PLATFORM`.

@@ -1,7 +1,7 @@
 # Spotify Charts pipeline: Airflow + raw Postgres + DuckDB warehouse (built by dbt).
 # Structure follows the course's 03_Airflow example: a separate Postgres for Airflow metadata
 # and for pipeline data, and airflow-init / -webserver / -scheduler with LocalExecutor.
-# The data is browsed with DBeaver on the laptop (raw-db on port 5433, warehouse file in ./data).
+# The data is browsed with CloudBeaver in the browser (http://localhost:8978), see the cloudbeaver service.
 # Difference: the Airflow services use an image built from ./Dockerfile (adds dbt, duckdb, kagglehub).
 
 services:
@@ -25,7 +25,7 @@ services:
     restart: always
 
   # --- Raw (bronze) database: the Kaggle tables as loaded by the DAG ---
-  # Port 5433 on the laptop: used by DBeaver.
+  # Port 5433 on the laptop: for connecting from the laptop itself. CloudBeaver uses raw-db:5432 inside Docker.
   raw-db:
     container_name: raw-db
     image: postgres:${POSTGRES_VERSION:-16.4}
