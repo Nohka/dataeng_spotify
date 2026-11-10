@@ -41,6 +41,7 @@ for dbt).
  airflow-db (Postgres): Airflow's own metadata
 ```
 
+
 **Star schema (gold layer).** The gold models are tables stored in the DuckDB file; the silver models
 (`stg_*`, `int_*`) are views (see *Why views for silver and tables for gold*).
 
@@ -119,6 +120,11 @@ Open Airflow at http://localhost:8080 (`airflow` / `airflow`). You should see tw
 
 The DAG **kaggle_to_raw** does the ingestion:
 
+<img width="1077" height="103" alt="image" src="https://github.com/user-attachments/assets/800b8328-b37b-4b7d-bd82-c3796d75afb1" />
+
+_Figure 1. Airflow DAG graph for kaggle_to_raw._
+
+
 | Task | What it does | Result |
 |---|---|---|
 | `download_files` | Downloads the 4 CSV files from Kaggle with kagglehub | Files in `data/kaggle/` (cached for later runs) |
@@ -126,6 +132,8 @@ The DAG **kaggle_to_raw** does the ingestion:
 | `load_charts_songs_daily`, `load_charts_artists_daily` | Deletes rows from `start_date` on and inserts the file's rows from `start_date` on, in one transaction | Rows in `raw.charts_*` |
 | `check_raw_quality` | Fails the run if the window is empty, keys are NULL, a chart position appears twice, a rank is outside 1–200, or a song/artist URI is duplicated | Pass or fail |
 | `trigger_dbt_transform` | Starts the DAG **dbt_transform** with the same `start_date` | — |
+
+
 
 The 4 raw tables already exist (created empty when raw-db first starts); they get rows in the load tasks.
 
@@ -144,6 +152,8 @@ four files and prints `Marking task as SUCCESS`.
 does not run, even when triggered), then press **▶ Trigger DAG**. The DAG has no schedule: it runs only
 when it is triggered. `download_files` finds the files from 2a and finishes in seconds; the four load
 tasks take a few minutes each.
+
+
 
 Follow the run: click **kaggle_to_raw** → **Grid**. Green = success; for a red task, click it → **Logs**.
 
@@ -210,6 +220,15 @@ runs `dbt build`: it creates the silver models (stg, int) as views and the gold 
 tables in the DuckDB warehouse, and
 runs every dbt test, in dependency order. dbt reads the raw tables straight from Postgres.
 
+<img width="202" height="98" alt="image" src="https://github.com/user-attachments/assets/26678b8b-af70-4e08-b9cb-c8f7d27bd62d" />
+
+_Figure 2. Airflow DAG graph for dbt_transform._
+
+<img width="1164" height="848" alt="image" src="https://github.com/user-attachments/assets/c310b450-4fa8-4489-8134-d8d0110ac6b1" />
+
+_Figure 3. dbt model dependencies._
+
+
 From then on, every successful **kaggle_to_raw** run triggers **dbt_transform**, as long as both DAGs
 are switched on. You can also trigger **dbt_transform** on its own (▶ in the UI), e.g. after changing a
 model.
@@ -264,6 +283,24 @@ has the file open, dbt cannot rebuild the models and the task fails with a lock 
 **Business questions.** The five queries are in `sql/queries/`. Open a file in DBeaver's SQL editor on the
 DuckDB connection and run it. Q1 is written for one artist (`'Taylor Swift'`); change the name in
 `q1_artist_strongest_country.sql`.
+
+### Results for the example analytical SQL queries
+
+1. For a given artist, in which country is their chart presence the strongest?
+<img width="943" height="136" alt="image" src="https://github.com/user-attachments/assets/69e6bcc4-9b2e-4b3b-b824-89f70d493dc8" />
+
+2. What is the hottest song in Estonia this week?
+<img width="1037" height="129" alt="image" src="https://github.com/user-attachments/assets/0b46ae40-859f-41fd-9059-41b9eff30071" />
+
+3. Which record labels are consistently producing hits?
+<img width="885" height="231" alt="image" src="https://github.com/user-attachments/assets/0009d453-a339-4ae4-b2aa-a6c9de136f54" />
+
+4. Which songs are breaking out (largest week-over-week stream growth among songs not in the Top 20 the week before)?
+<img width="1078" height="129" alt="image" src="https://github.com/user-attachments/assets/5bd07815-124b-4e16-b0a9-131a51c76230" />
+
+5. How long does a song typically stay on the chart after release, and does it differ by country? (Example for Estonia, Finland and USA)
+<img width="1020" height="88" alt="image" src="https://github.com/user-attachments/assets/464daf05-6145-4571-98e0-7a297a28e56f" />
+
 
 ## Getting the latest data later
 
