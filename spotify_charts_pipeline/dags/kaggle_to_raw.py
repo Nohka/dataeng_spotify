@@ -159,6 +159,11 @@ def download_files(**context):
             shutil.rmtree(old_dir)
             print(f"Deleted old dataset version: {old_dir}")
 
+    # Make the downloaded version easy to find: last line of the log, and its own XCom entry
+    # (Airflow UI: download_files -> XCom), so it can be entered as dataset_version in later runs.
+    print(f"Kaggle dataset version: {version}")
+    context["ti"].xcom_push(key="dataset_version", value=version)
+
     # Only file paths go through XCom, never the data itself
     return paths
 
