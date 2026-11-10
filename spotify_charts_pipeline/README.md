@@ -2,7 +2,8 @@
 
 Data pipeline for the Kaggle dataset [Spotify Charts (Daily Updated)](https://www.kaggle.com/datasets/gonzalopezgil/spotify-charts-daily-updated).
 Airflow downloads the data and loads it into a raw Postgres database; dbt builds a star schema in a
-DuckDB warehouse that answers five business questions. Both layers are browsed with DBeaver.
+DuckDB warehouse that answers five business questions. Both layers are browsed with CloudBeaver
+(DBeaver in the browser), which runs in Docker too.
 
 The setup follows the course's `03_Airflow` example (separate Postgres for Airflow metadata and pipeline
 data, `airflow-init` / `-webserver` / `-scheduler` with LocalExecutor, `.env.example` with defaults) and
@@ -39,6 +40,7 @@ for dbt).
  └──────────────────────────────────────────────┘
 
  airflow-db (Postgres): Airflow's own metadata
+ cloudbeaver: browser UI to look at both databases (http://localhost:8978)
 ```
 
 **Star schema (gold layer).** The gold models are tables stored in the DuckDB file; the silver models
@@ -80,9 +82,7 @@ spotify_charts_pipeline/
 
 - Docker Desktop with at least **8 GB of memory** (Settings → Resources)
 - About **30 GB of free disk**: ~14 GB for the Kaggle files, the rest for Postgres
-- [DBeaver](https://dbeaver.io/download/) (free Community edition) to browse the data. On an Apple
-  Silicon Mac (M1–M4) install the **Apple Silicon** version: the download page's big button may offer
-  the Intel one, and its DuckDB driver fails (see Troubleshooting)
+- A web browser. No database app to install: the data is browsed with CloudBeaver, which runs in Docker
 - No Kaggle account needed: the dataset is public and is downloaded anonymously
 
 ## Local services and credentials
@@ -90,8 +90,12 @@ spotify_charts_pipeline/
 | What | Address | User | Password |
 |---|---|---|---|
 | Airflow UI | http://localhost:8080 | `airflow` | `airflow` |
-| Raw database (Postgres) | `localhost:5433`, database `spotify_raw` | `raw_user` | `raw_pass` |
-| Warehouse (DuckDB file) | `data/warehouse/spotify.duckdb` in the project folder | | |
+| CloudBeaver | http://localhost:8978 | you choose them on the first visit | |
+| Raw database (Postgres) | in CloudBeaver: `raw-db:5432`, database `spotify_raw` (from the laptop: `localhost:5433`) | `raw_user` | `raw_pass` |
+| Warehouse (DuckDB file) | in CloudBeaver: `/warehouse/spotify.duckdb` (in the project folder: `data/warehouse/spotify.duckdb`) | | |
+
+CloudBeaver runs inside Docker, so it reaches the raw database by its service name `raw-db` and port
+`5432`, not `localhost:5433`.
 
 These are local defaults from `.env.example`. To change them, copy it to `.env` and edit
 (`cp .env.example .env`), then run `docker compose up -d`.
@@ -108,14 +112,66 @@ docker compose ps -a
 
 The first build takes a few minutes (it installs dbt and DuckDB's postgres extension). Wait until
 `airflow-init` shows **Exited (0)**, `airflow-db` and `raw-db` show **healthy**, and
-`airflow-webserver` and `airflow-scheduler` show **Up**. `airflow-init` only runs once to set up
+`airflow-webserver`, `airflow-scheduler` and `cloudbeaver` show **Up**. `airflow-init` only runs once to set up
 Airflow (database, admin user, `raw_db` connection) and then exits. Re-running `docker compose up -d`
 is safe.
 
 Open Airflow at http://localhost:8080 (`airflow` / `airflow`). You should see two DAGs,
 **kaggle_to_raw** and **dbt_transform**, both paused, and no red "DAG Import Errors" banner.
 
-## Step 2: load the Kaggle data into the raw tables
+## Step 2: start the download, and set up CloudBeaver meanwhile
+
+The download from Kaggle (~14 GB, about 20 minutes) is the only long wait. Start it first, then set up
+CloudBeaver in the browser while it runs.
+
+**2a. Start the download.** In a terminal:
+
+```bash
+docker compose exec airflow-scheduler airflow tasks test kaggle_to_raw download_files 2026-10-29
+```
+
+This runs only the `download_files` task of the DAG **kaggle_to_raw**, in your terminal, while the DAG
+is still paused. It does not appear in the Airflow UI and does not load anything into the database.
+Keep the terminal open, and the computer awake, until it lists all four files and prints
+`Marking task as SUCCESS`.
+
+Just before that, the output shows which dataset version you downloaded, e.g.
+`Kaggle dataset version: 161`. Note the number: you enter it when you trigger the DAG in step 3, so the
+run uses these files instead of downloading a newer version.
+
+**2b. Meanwhile, set up CloudBeaver.** Do this soon after step 1: CloudBeaver accepts its first-time
+setup only for a limited time after it starts (see Troubleshooting if the page shows *something went
+wrong*).
+
+1. Open http://localhost:8978. The first time, a setup page asks you to choose an admin username and
+   password (any you like); keep the other settings as they are.
+2. Log in as that admin (top-right corner). Without logging in you are a guest, and guests cannot create
+   connections: the **+** button is missing.
+3. Turn on the DuckDB driver, which you need in step 5 (CloudBeaver switches it off by default): gear
+   icon (top right) → **Administration** → **Server Configuration** → **Disabled drivers**: remove
+   **DuckDB** → **Save**.
+4. **+** (top bar) → **New Connection** → **PostgreSQL**:
+
+| Field | Value |
+|---|---|
+| Host | `raw-db` |
+| Port | `5432` |
+| Database | `spotify_raw` |
+| Username | `raw_user` |
+| Password | `raw_pass` |
+
+Click **Test**, then **Create**. The connection appears in the navigation tree on the left. The tables
+are under **spotify_raw** → **Schemas** → **raw** → **Tables**. They already exist (created when raw-db
+first starts), but stay empty until step 3. If the `raw` schema is missing, right-click **Schemas** →
+**Refresh**.
+
+The DuckDB connection to the warehouse comes later, in step 5: the warehouse file does not exist until
+dbt has built it.
+
+## Step 3: load the raw tables and browse them
+
+**Wait until the download in 2a has finished** (`Marking task as SUCCESS`). Do not trigger the DAG while
+it is still running: both would download into the same files.
 
 The DAG **kaggle_to_raw** does the ingestion:
 
@@ -127,32 +183,26 @@ The DAG **kaggle_to_raw** does the ingestion:
 | `check_raw_quality` | Fails the run if the window is empty, keys are NULL, a chart position appears twice, a rank is outside 1–200, or a song/artist URI is duplicated | Pass or fail |
 | `trigger_dbt_transform` | Starts the DAG **dbt_transform** with the same `start_date` | — |
 
-The 4 raw tables already exist (created empty when raw-db first starts); they get rows in the load tasks.
-
-**2a. Download the files first (recommended the first time).** The download is ~14 GB, about
-20 minutes. Running it on its own gets the long wait out of the way:
-
-```bash
-docker compose exec airflow-scheduler airflow tasks test kaggle_to_raw download_files 2026-10-29
-```
-
-This runs only `download_files`, in your terminal, while the DAG is still paused. It does not appear in
-the Airflow UI and does not load anything into the database. Keep the terminal open until it lists all
-four files and prints `Marking task as SUCCESS`.
-
-**2b. Run the DAG.** In the Airflow UI, switch on the toggle next to **kaggle_to_raw** (a paused DAG
-does not run, even when triggered), then press **▶ Trigger DAG**. The DAG has no schedule: it runs only
-when it is triggered. `download_files` finds the files from 2a and finishes in seconds; the four load
-tasks take a few minutes each.
+**3a. Run the DAG.** In the Airflow UI, switch on the toggle next to **kaggle_to_raw** (a paused DAG
+does not run, even when triggered), then press **▶ Trigger DAG**. In the form that opens, enter the
+version number from 2a as `dataset_version` (e.g. `161`), then press **Trigger**. The DAG has no
+schedule: it runs only when it is triggered. `download_files` finds the files from 2a and finishes in
+seconds; the four load tasks take a few minutes each.
 
 Follow the run: click **kaggle_to_raw** → **Grid**. Green = success; for a red task, click it → **Logs**.
+
+**Which data version did the run use?** Click the green `download_files` square → **XCom**: the entry
+`dataset_version` shows the Kaggle version number (e.g. `161`). The same number is printed near the end of
+the task's log (`Kaggle dataset version: 161`) and is the folder name in
+`data/kaggle/datasets/gonzalopezgil/spotify-charts-daily-updated/versions/`.
 
 Leave **dbt_transform** paused for now. Its run, started by `trigger_dbt_transform`, waits as *queued*
 until step 4.
 
-**Parameters.** The run uses `start_date` 2025-01-01 (chart rows from that date on) and the latest
-dataset version. To change them for one run, use *Trigger DAG w/ config* (`start_date`,
-`dataset_version`); to change the defaults, set `PIPELINE_START_DATE` / `KAGGLE_DATASET_VERSION` in `.env`.
+**Parameters.** The trigger form has two fields: `start_date` (default 2025-01-01: chart rows from that
+date on) and `dataset_version` (a version number, or `latest` for the newest version on Kaggle, which
+is downloaded first if you don't have it yet). Values entered in the form apply to that run only; to change the defaults, set
+`PIPELINE_START_DATE` / `KAGGLE_DATASET_VERSION` in `.env`.
 
 **Only data from `start_date` on is loaded.** Kaggle offers each chart table as one CSV file with
 all years (2017 onwards), so the download always includes older data. The load tasks skip it: only
@@ -161,23 +211,10 @@ rows from `start_date` on reach Postgres, and dbt only reads those.
 **Idempotency.** Every load deletes exactly what it inserts, inside one transaction, so running the DAG
 again for the same input gives the same tables and never creates duplicates.
 
-## Step 3: browse the raw tables in DBeaver
-
-Connections and schemas are listed in DBeaver's **Database Navigator** (if it is not shown:
-**Window** → **Database Navigator**).
-
-New connection → **PostgreSQL** (DBeaver fills in port 5432; change it to **5433**):
-
-| Field | Value |
-|---|---|
-| Host | `localhost` |
-| Port | `5433` |
-| Database | `spotify_raw` |
-| Username | `raw_user` |
-| Password | `raw_pass` |
-
-The tables are under **spotify_raw** → **Schemas** → **raw** → **Tables**. Open a table and use the
-*Data* tab, or open an SQL editor and check the row counts:
+**3b. Browse the raw tables in CloudBeaver.** When the load tasks are green, go to the PostgreSQL
+connection from 2b (right-click it → **Refresh** to see the new rows). Double-click a table under
+**spotify_raw** → **Schemas** → **raw** → **Tables** to see its data, or open an SQL editor (**SQL**
+button in the top bar) and check the row counts:
 
 ```sql
 SELECT 'songs' AS t, COUNT(*) FROM raw.songs
@@ -188,7 +225,7 @@ UNION ALL SELECT 'charts_artists_daily', COUNT(*) FROM raw.charts_artists_daily;
 
 Expect roughly 215k songs, 74k artists and about 9 million rows in each chart table with `start_date`
 2025-01-01 (more as the dataset grows). If the tables are empty, the load tasks have not finished yet:
-refresh (F5) once they are green. If the `raw` schema is missing, right-click **Schemas** → **Refresh**.
+refresh once they are green.
 
 Example query:
 
@@ -205,7 +242,7 @@ dbt staging models do the type casts), so `"rank"::int` makes the sort numeric.
 
 ## Step 4: build the dbt models
 
-In the Airflow UI, switch on the toggle next to **dbt_transform**. The queued run from step 2 starts and
+In the Airflow UI, switch on the toggle next to **dbt_transform**. The queued run from step 3 starts and
 runs `dbt build`: it creates the silver models (stg, int) as views and the gold models (mart, dim) as
 tables in the DuckDB warehouse, and
 runs every dbt test, in dependency order. dbt reads the raw tables straight from Postgres.
@@ -214,24 +251,23 @@ From then on, every successful **kaggle_to_raw** run triggers **dbt_transform**,
 are switched on. You can also trigger **dbt_transform** on its own (▶ in the UI), e.g. after changing a
 model.
 
-## Step 5: browse the dbt models in DBeaver
+## Step 5: browse the dbt models in CloudBeaver
 
 The warehouse file `data/warehouse/spotify.duckdb` exists after the first successful **dbt_transform** run.
+CloudBeaver sees the `data/warehouse` folder as `/warehouse`, read-only, so it can never change the file.
 
-1. New connection → **DuckDB**. Path: `data/warehouse/spotify.duckdb` in the project folder (use
-   *Browse*). Let DBeaver download the driver when it asks.
-2. Open the file read-only: the pipeline writes to it, and DuckDB allows only one writer at a time.
-   - **Driver properties** tab: right-click **User Properties** → *Add new property*, name
-     `duckdb.read_only`, value `true`.
-   - Click **Finish**. Then right-click the connection → **Edit Connection** → **Connection settings**
-     → **General**: tick **Read-only connection**.
-3. In the same dialog, **Connection settings → Initialization → Bootstrap queries → Configure…**: add
-   these three queries (one per *Add*). DBeaver runs them every time it connects:
+1. **+** → **New Connection** → **DuckDB** (the driver you turned on in 2b). Path:
+   `/warehouse/spotify.duckdb`.
+2. Open the file read-only (the folder is read-only, and DuckDB allows only one writer at a time):
+   **Driver properties** tab → add a property named `duckdb.read_only` with value `true`. Click
+   **Create**.
+3. Open an SQL editor on this connection and run these three queries. Run them again each time you
+   reconnect:
 
    ```sql
    INSTALL postgres;
    LOAD postgres;
-   ATTACH 'host=localhost port=5433 dbname=spotify_raw user=raw_user password=raw_pass' AS raw (TYPE postgres, READ_ONLY);
+   ATTACH 'host=raw-db port=5432 dbname=spotify_raw user=raw_user password=raw_pass' AS raw (TYPE postgres, READ_ONLY);
    ```
 
    The `stg_*` and `int_*` views read the raw tables through a catalog called `raw`; without this
@@ -240,12 +276,11 @@ The warehouse file `data/warehouse/spotify.duckdb` exists after the first succes
    `INSTALL postgres` downloads DuckDB's postgres extension the first time (needs internet).
    Type the quotes as straight `'`, not curly `‘ ’`: macOS may replace them automatically (see
    Troubleshooting).
-4. Connect (or disconnect and connect again: bootstrap queries only run when the connection opens).
-   Check that both catalogs are there with `SELECT database_name FROM duckdb_databases();`: it should
+4. Check that both catalogs are there with `SELECT database_name FROM duckdb_databases();`: it should
    list `spotify` and `raw`. Under **spotify** → **main**, the `mart_*` and `dim_*` models are in
    **Tables** and the `stg_*` and `int_*` models in **Views**; the raw tables are under **raw** → **raw**.
    In SQL, use the model name directly (`dim_song`) or the full name `spotify.main.dim_song`. Open a
-   model and use the *Data* tab, or run SQL:
+   model to see its data, or run SQL:
 
    ```sql
    SELECT *
@@ -258,25 +293,25 @@ The warehouse file `data/warehouse/spotify.duckdb` exists after the first succes
 The `mart_*` and `dim_*` tables answer queries almost instantly. The `stg_*` and `int_*` views compute
 their results from the raw tables on every query, so querying them can take a few seconds.
 
-**Disconnect the DuckDB connection before dbt_transform runs** (right-click → *Disconnect*): while DBeaver
+**Disconnect the DuckDB connection before dbt_transform runs** (right-click → *Disconnect*): while CloudBeaver
 has the file open, dbt cannot rebuild the models and the task fails with a lock error.
 
-**Business questions.** The five queries are in `sql/queries/`. Open a file in DBeaver's SQL editor on the
-DuckDB connection and run it. Q1 is written for one artist (`'Taylor Swift'`); change the name in
+**Business questions.** The five queries are in `sql/queries/`. Copy a query into CloudBeaver's SQL
+editor on the DuckDB connection and run it. Q1 is written for one artist (`'Taylor Swift'`); change the name in
 `q1_artist_strongest_country.sql`.
 
 ## Getting the latest data later
 
 The pipeline runs on demand, not on a schedule. To refresh the data:
 
-1. Disconnect DBeaver's DuckDB connection (while it is connected, `dbt_build` cannot write the warehouse
+1. Disconnect CloudBeaver's DuckDB connection (while it is connected, `dbt_build` cannot write the warehouse
    file; the task retries 3 times, 10 minutes apart, before it fails).
 2. In the Airflow UI, press **▶ Trigger DAG** on **kaggle_to_raw** (both DAGs must be switched on). It
    downloads the newest dataset version, reloads the raw tables from `start_date` on and triggers
    **dbt_transform**, which rebuilds the gold tables.
 3. Keep the computer awake until both runs are green: the download is ~14 GB (~20 minutes), and if the
    computer sleeps, it fails with `Read timed out`.
-4. Reconnect DBeaver to see the new data.
+4. Reconnect CloudBeaver to see the new data (and run the three `ATTACH` queries from step 5 again).
 
 Kaggle publishes a new version every day, so a run on a later day downloads the ~14 GB again.
 `download_files` deletes the previous version afterwards, so the cache stays at one copy.
@@ -292,8 +327,8 @@ docker compose logs -f airflow-scheduler                 # task output, DAG impo
 docker compose exec airflow-scheduler airflow dags trigger kaggle_to_raw    # refresh the data (also ▶ in the UI)
 docker compose stop                                      # pause everything, keep all data
 docker compose start                                     # continue
-docker compose down                                      # remove containers (data stays in pgdata_*/ and data/)
-docker compose down && rm -rf pgdata_airflow pgdata_raw  # reset both databases
+docker compose down                                      # remove containers (data stays in the Docker volumes and data/)
+docker compose down -v                                   # also delete the volumes: both databases and CloudBeaver's settings
 ```
 
 dbt by hand, inside the scheduler container:
@@ -326,7 +361,7 @@ changed song URI must be re-mapped for the whole history.
 | Workload | Bulk loads (delete + insert of a date window), quality checks | Scans and aggregations over millions of chart rows (weekly roll-ups, window functions, medians) |
 | Storage | Row-oriented server with users and transactions | Columnar and vectorised: reads only the columns a query needs, uses all CPU cores |
 | Why here | A proper database server for the bronze layer that other tools can connect to; mirrors the course setup | The models were developed on DuckDB; aggregations over ~4M rows per chart table run in seconds without indexes or tuning |
-| Limits | Slower for analytical queries on large tables | A file, not a server: one writer at a time, so tasks run one after another and DBeaver opens it read-only |
+| Limits | Slower for analytical queries on large tables | A file, not a server: one writer at a time, so tasks run one after another and CloudBeaver opens it read-only |
 
 The gold tables use DuckDB's columnar storage: a query that needs a few columns of `mart_songs_weekly`
 reads only those columns from the file, compressed.
@@ -371,25 +406,35 @@ Main findings from data discovery (details in `notebooks/data_pipelines.ipynb` a
 - **Runs download ~14 GB again**: the cached files belong to one dataset version (shown in the path,
   e.g. `data/kaggle/.../versions/149`), and Kaggle publishes a new version daily. While testing, set
   `KAGGLE_DATASET_VERSION=149` in `.env` (then `docker compose up -d`) to keep using the files you have.
-- **`dbt_build` fails with a lock error**: DBeaver still has the DuckDB file open. Disconnect it and
+- **`***` in log paths** (e.g. `/opt/***/data/kaggle/...`): Airflow hides passwords in its logs, and the
+  default password is `airflow`, so every occurrence of the word is shown as `***`. The real path is
+  `/opt/airflow/data/kaggle/...`, which is `data/kaggle/...` in the project folder.
+- **`dbt_build` fails with a lock error**: CloudBeaver still has the DuckDB file open. Disconnect it and
   re-run the task (click it → *Clear*).
 - **`dbt_build` fails with `No dbt_project.yml found`**: the `dbt_project/` folder is empty or
   incomplete (Docker creates an empty folder if it is missing). Copy the complete folder into the project
   so that `dbt_project/dbt_project.yml` exists, then *Clear* the task. No restart is needed.
-- **DBeaver: `DuckDB JNI library not found ... macos_amd64`**: the Intel version of DBeaver is running on
-  an Apple Silicon Mac (Activity Monitor shows *Kind = Intel*). Install the Apple Silicon version, then
-  **Database** → **Driver Manager** → **DuckDB** → **Edit** → **Libraries**: delete the entry and
-  *Download/Update*.
-- **DBeaver: `Connection to localhost:5432 refused`**: the PostgreSQL connection uses DBeaver's default
-  port. Change it to **5433** (right-click the connection → *Edit Connection*).
-- **DBeaver: `Catalog "raw" does not exist` or `schema "raw.raw" does not exist`**: the `ATTACH`
-  bootstrap query did not run. Check that its quotes are straight `'`, not curly `‘ ’` (macOS replaces
-  them automatically: System Settings → Keyboard → Text Input → Edit → turn off *Use smart quotes and
-  dashes*), then disconnect and connect. Running the `ATTACH` line in the SQL editor shows its error.
+- **CloudBeaver: the page shows "something went wrong" on the first visit**: CloudBeaver only accepts
+  its first-time setup (choosing the admin user) for a limited time after the container starts;
+  `docker compose logs cloudbeaver` then shows `Server configuration time has expired. A server restart
+  is required to continue.` Restart it with `docker compose restart cloudbeaver` and complete the setup
+  page right away. Nothing is lost: until the setup is done, CloudBeaver has nothing saved.
+- **CloudBeaver: no + (New Connection) button**: you are browsing as a guest. Log in as the admin you
+  created on the first visit (top-right corner).
+- **CloudBeaver: DuckDB is not in the New Connection list**: the driver is disabled by default. Turn it
+  on as described in step 2b.
+- **CloudBeaver: `Connection refused`** on the PostgreSQL connection: the host is `localhost` or the port
+  is `5433`. Inside Docker it must be host **`raw-db`**, port **`5432`** (right-click the connection →
+  *Edit Connection*).
+- **CloudBeaver: `Catalog "raw" does not exist` or `schema "raw.raw" does not exist`**: the `ATTACH`
+  query from step 5 has not run since you connected. Run it again. Check that its quotes are straight
+  `'`, not curly `‘ ’` (macOS replaces them automatically: System Settings → Keyboard → Text Input →
+  Edit → turn off *Use smart quotes and dashes*).
 - **A task is killed or DuckDB reports out of memory**: give Docker more memory, or lower
   `DUCKDB_MEMORY_LIMIT` in `.env`.
-- **`container raw-db is unhealthy`**: usually a corrupt data directory:
-  `docker compose down && rm -rf pgdata_airflow pgdata_raw && docker compose up -d`.
-- **Changed `sql/create_raw_tables.sql`**: it only runs when raw-db is created; remove `pgdata_raw`
-  and start again.
+- **`container raw-db is unhealthy`**: usually a corrupt data directory. Delete the volumes and start
+  again: `docker compose down -v && docker compose up -d`. This empties both databases and CloudBeaver's
+  settings; then run the pipeline again from step 2.
+- **Changed `sql/create_raw_tables.sql`**: it only runs when raw-db is created. Delete the volumes the
+  same way (`docker compose down -v && docker compose up -d`) and run the pipeline again from step 2.
 - **Platform mismatch errors** (Apple Silicon): `unset DOCKER_DEFAULT_PLATFORM`.
