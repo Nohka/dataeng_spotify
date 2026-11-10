@@ -26,18 +26,18 @@ raw CSVs  ──►  staging  ──►  intermediate  ──►  marts and dims
 ## How the project is organised
 
 ```
+spotify_charts_outline/        # project 1: Archived
+   tests/                      # tests
+   demo_queries/               # example SQL queries
+   DATA_DICTIONARY.md          # data definitions
+   README.md                   # original project documentation
+
 spotify_charts_pipeline/       # project 2: Main project
    README.md                   # project overview, documentation and instructions
    dags/                       # Airflow DAGs
    dbt_project/                # dbt models and transformations
    notebooks/                  # exploratory analysis and model prototypes
    sql/                        # updated SQL scripts
-
-spotify_charts_outline/        # project 1: Archived
-   tests/                      # tests
-   demo_queries/               # example SQL queries
-   DATA_DICTIONARY.md          # data definitions
-   README.md                   # original project documentation
 
 README.md                      # repository overview
 ```
