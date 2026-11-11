@@ -20,3 +20,14 @@ models:
       # them once (fully rebuilt, never incremental), so reporting queries are fast and do not
       # need the raw Postgres database.
       +materialized: table
+
+seeds:
+  spotify_charts:
+    countries:
+      +column_types:
+        alpha-2: varchar
+        alpha-3: varchar
+        country-code: varchar
+        region-code: varchar
+        sub-region-code: varchar
+        intermediate-region-code: varchar

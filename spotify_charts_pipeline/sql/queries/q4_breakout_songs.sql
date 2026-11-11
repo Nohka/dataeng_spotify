@@ -5,7 +5,7 @@
 
 SELECT
     w.week_start
-    , w.country_code
+    , c.country_name
     , s.track_name
     , s.artist_names
     , w.prev_week_best_rank
@@ -15,6 +15,7 @@ SELECT
     , w.stream_gain_wow
 FROM mart_songs_weekly w
     INNER JOIN dim_song s USING (song_id)
+    INNER JOIN dim_country c USING (country_code)
 WHERE 0=0
     AND w.country_code <> 'global'
     AND w.is_complete_week
