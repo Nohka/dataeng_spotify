@@ -51,8 +51,9 @@ for dbt).
 | `mart_artist_country_weekly_presence` | Fact | week × country × artist | Q1 |
 | `mart_songs_weekly` | Fact | week × country × song | Q2, Q3, Q4 |
 | `mart_song_chart_lifespan` | Fact | song × country | Q5 |
-| `dim_song` | Dimension (SCD 1) | song | — |
-| `dim_artist` | Dimension (SCD 1) | artist | — |
+| `dim_song` | Dimension (SCD 1) | song | Q2, Q4 |
+| `dim_artist` | Dimension (SCD 1) | artist | Q1 |
+| `dim_country` | Dimension (static, from seed) | country | Q1, Q4, Q5 |
 
 ## Repository structure
 
