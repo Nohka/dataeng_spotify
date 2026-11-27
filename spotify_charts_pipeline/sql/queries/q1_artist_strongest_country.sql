@@ -6,7 +6,7 @@
 SELECT
     a.artist_name
     , p.artist_uri
-    , p.country_code
+    , c.country_name
     , SUM(p.chart_days)                                         AS chart_days
     , MIN(p.best_rank)                                          AS best_rank
     , ROUND(SUM(p.rank_sum) / SUM(p.chart_days), 1)             AS avg_rank     -- day-weighted, not an average of weekly averages
@@ -17,12 +17,13 @@ SELECT
     )                                                           AS country_rank_for_artist
 FROM mart_artist_country_weekly_presence p
     INNER JOIN dim_artist a USING (artist_uri)
+    INNER JOIN dim_country c USING (country_code)
 WHERE 0=0
     AND a.artist_name = 'Taylor Swift'
 GROUP BY
     a.artist_name
     , p.artist_uri
-    , p.country_code
+    , c.country_name
 QUALIFY country_rank_for_artist <= 5
 ORDER BY
     p.artist_uri

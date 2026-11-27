@@ -14,6 +14,12 @@ models:
               arguments:
                 to: ref('dim_artist')
                 field: artist_uri
+      - name: country_code
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_country')
+                field: country_code
 
   - name: mart_songs_weekly
     description: >
@@ -28,6 +34,12 @@ models:
               arguments:
                 to: ref('dim_song')
                 field: song_id
+      - name: country_code
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_country')
+                field: country_code
 
   - name: mart_song_chart_lifespan
     description: >
@@ -40,6 +52,12 @@ models:
               arguments:
                 to: ref('dim_song')
                 field: song_id
+      - name: country_code
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_country')
+                field: country_code
 
   # --- Dimensions ---
   - name: dim_song
@@ -53,3 +71,10 @@ models:
     columns:
       - name: artist_uri
         data_tests: [unique, not_null]
+
+  - name: dim_country
+    description: Country dimension (ISO 3166). Key country_code (lowercase alpha-2, plus 'global') joins to every mart's country_code.
+    columns:
+      - name: country_code
+        data_tests: [unique, not_null]
+

@@ -105,16 +105,48 @@ def download_files(**context):
               "If this fails with 401/403, add KAGGLE_USERNAME and KAGGLE_KEY to .env (see README).")
 
     # imported after the credential check, so kagglehub sees the cleaned-up environment
+    import time
+
     import kagglehub
+    import kagglehub.clients
+    import requests
+
+    # kagglehub gives up when the server sends nothing for 15 s, which happens now and then during
+    # the 10 GB charts_songs_daily download. Allow longer pauses (read at call time, so this works).
+    kagglehub.clients.DEFAULT_READ_TIMEOUT = 120
 
     version = str(context["params"]["dataset_version"] or "").strip()
+    if version.lower() == "latest":
+        version = ""  # same as empty; kagglehub only accepts a version number
     handle = f"{KAGGLE_HANDLE}/versions/{version}" if version else KAGGLE_HANDLE
+
+    def download_with_resume(file_name, attempts=10):
+        # A dropped connection leaves the partial file on disk, and kagglehub continues it with an
+        # HTTP Range request on the next call. So retrying here resumes the download; it does not
+        # start the 10 GB file again. A file only counts as cached once it is complete.
+        for attempt in range(1, attempts + 1):
+            try:
+                return kagglehub.dataset_download(handle, path=file_name)
+            except (requests.exceptions.ConnectionError,
+                    requests.exceptions.ChunkedEncodingError,
+                    requests.exceptions.Timeout) as e:
+                if attempt == attempts:
+                    raise
+                wait = min(10 * attempt, 60)
+                print(f"{file_name}: download interrupted ({e.__class__.__name__}), "
+                      f"resuming in {wait} s (attempt {attempt + 1}/{attempts})")
+                time.sleep(wait)
 
     paths = {}
     for table in TABLES:
         # One file at a time: the full-dataset archive can be unavailable right after a daily update.
-        paths[table] = kagglehub.dataset_download(handle, path=f"{table}.csv")
+        paths[table] = download_with_resume(f"{table}.csv")
         print(f"{table}: {paths[table]} ({os.path.getsize(paths[table]) / 1e9:.2f} GB)")
+        if not version:
+            # Pin the version after the first file (path ends in .../versions/<n>/<file>), so all
+            # four files come from the same version even if Kaggle publishes a new one mid-run.
+            version = os.path.basename(os.path.dirname(paths[table]))
+            handle = f"{KAGGLE_HANDLE}/versions/{version}"
 
     # Kaggle publishes a new dataset version every day, and kagglehub keeps each version in its own
     # folder (.../versions/<n>/). Delete the older versions, so the cache stays at one copy (~14 GB)
@@ -126,6 +158,11 @@ def download_files(**context):
         if old_dir != current_version_dir and os.path.isdir(old_dir):
             shutil.rmtree(old_dir)
             print(f"Deleted old dataset version: {old_dir}")
+
+    # Make the downloaded version easy to find: last line of the log, and its own XCom entry
+    # (Airflow UI: download_files -> XCom), so it can be entered as dataset_version in later runs.
+    print(f"Kaggle dataset version: {version}")
+    context["ti"].xcom_push(key="dataset_version", value=version)
 
     # Only file paths go through XCom, never the data itself
     return paths
@@ -213,7 +250,8 @@ with DAG(
         "start_date": Param(os.environ.get("PIPELINE_START_DATE", "2025-01-01"), type="string",
                             format="date", description="First chart date to load"),
         "dataset_version": Param(os.environ.get("KAGGLE_DATASET_VERSION", ""), type="string",
-                                 description="Kaggle dataset version; empty = latest"),
+                                 description="Kaggle dataset version number, e.g. 159; "
+                                             "empty or 'latest' = newest version"),
     },
     tags=["spotify", "ingestion", "postgres"],
 ) as dag:
